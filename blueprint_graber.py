@@ -30,16 +30,21 @@ def load_blueprints_materials(filename):
 
 def get_blueprint_materials(type_id, materials_filename=BLUEPRINTS_MATERIALS_PATH, typeid_filename=TYPEID_PATH):
 	all_blueprints = load_blueprints_materials(materials_filename)
-	if str(type_id) not in all_blueprints:
-		return []
-	materials = all_blueprints[str(type_id)]
+	entry = all_blueprints.get(str(type_id))
+	if not entry:
+		return [], 1  # если не нашли — вернём пустой список и 1 как количество на выходе
+
+	materials_raw = entry.get("materials", [])
+	output_qty = entry.get("output_qty", 1)
+
 	results = []
-	for mat_id, qty in materials:
+	for mat_id, qty in materials_raw:
 		mat_name = find_type_name_by_id_local(mat_id, typeid_filename)
 		if not mat_name:
 			mat_name = f'Unknown({mat_id})'
 		results.append((mat_id, mat_name, qty))
-	return results
+
+	return results, output_qty
 
 def get_blueprint_materials_by_name(item_name, materials_filename=BLUEPRINTS_MATERIALS_PATH, typeid_filename=TYPEID_PATH):
 	type_id = find_type_id_by_name_local(item_name, typeid_filename)
@@ -51,8 +56,9 @@ def get_blueprint_materials_by_name(item_name, materials_filename=BLUEPRINTS_MAT
 if __name__ == '__main__':
 	item_name = 'Combat Scanner Probe I Blueprint'
 	try:
-		materials = get_blueprint_materials_by_name(item_name, BLUEPRINTS_MATERIALS_PATH, TYPEID_PATH)
+		materials, output_qty = get_blueprint_materials_by_name(item_name)
+		print(f'Производится: {output_qty} штук за цикл\n')
 		for mat_id, mat_name, qty in materials:
-			print(f'{mat_name} ({mat_id}): {qty}')
+			print(f'{mat_name:25} ({mat_id:>6}): {qty}')
 	except Exception as e:
 		print(e)

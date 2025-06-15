@@ -2,7 +2,7 @@ import requests
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-TYPEID_PATH = resources/typeid.json
+TYPEID_PATH = "resources/typeid.json"
 
 def load_type_ids(filename):
 	with open(filename, encoding='utf-8') as f:
@@ -23,17 +23,30 @@ def get_blueprint_materials(type_id):
 		raise RuntimeError(f'❌ Ошибка запроса: статус {resp.status_code}')
 
 	data = resp.json()
-	materials_dict = data.get('activities', {}).get('manufacturing', {}).get('materials', {})
+	activities = data.get('activities', {})
+	manufacturing = activities.get('manufacturing', {})
+	materials_dict = manufacturing.get('materials', {})
+	products_dict = manufacturing.get('products', {})
 
-	if not materials_dict:
-		return []
+	if not materials_dict or not products_dict:
+		return None  # игнорируем блюпринты без материалов или продукта
 
-	results = []
+	# Получаем первую (основную) продукцию и её количество
+	_, product = next(iter(products_dict.items()))
+	output_qty = product.get('quantity', 1)
+
+	# Сохраняем материалы
+	materials = []
 	for mat_id_str, mat_data in materials_dict.items():
 		mat_id = int(mat_id_str)
 		qty = mat_data['quantity']
-		results.append([mat_id, qty])
-	return results
+		materials.append([mat_id, qty])
+
+	return {
+		'materials': materials,
+		'output_qty': output_qty
+	}
+
 
 def main():
 	blueprint_ids = get_all_blueprint_ids(TYPEID_PATH)

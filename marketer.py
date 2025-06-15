@@ -3,7 +3,11 @@
 import argparse
 import requests
 import json
+import time
 import os
+from rich.console import Console
+from rich.table import Table
+from rich import box
 from blueprint_graber import get_blueprint_materials_by_name, find_type_id_by_name_local
 
 def load_regions(filename='resources/regions.json'):
@@ -58,24 +62,33 @@ def main():
 	args = parser.parse_args()
 
 	item_name = args.item
+	item_id = find_type_id_by_name_local(item_name)
 	broker_fee = args.broker / 100
 	station_fee = args.station / 100
 	sales_tax = args.tax / 100
 	material_efficiency = args.me
 
+	local_time = time.localtime()
+	formated_time = time.strftime("%Y-%m-%d/%H:%M:%S", local_time)
+
 	try:
 		region_map = load_regions()
 		region_id = resolve_region_id_by_name(args.region, region_map)
 
-		materials = get_blueprint_materials_by_name(item_name)
+		# 🔧 Тут: получаем материалы и output_qty
+		materials, output_qty = get_blueprint_materials_by_name(item_name)
 		type_ids = [mat_id for mat_id, _, _ in materials]
 		prices = get_material_prices_by_region(type_ids, region_id)
 
-		print(f'📦 Материалы для: {item_name} в регионе {args.region} (ID: {region_id})')
-		print(f'{"Материал":25} {"ID":8} {"Кол-во":>6} {"Цена за ед.":>15} {"Итоговая цена":>20}')
-		print('-' * 90)
-
 		total_material_cost = 0
+		console = Console()
+
+		table = Table(title=f'Материалы для: {item_name} ID: {item_id} ({formated_time})\nПроизводится: {output_qty} шт за цикл', box=box.SIMPLE_HEAVY)
+		table.add_column("Материал", style="cyan", no_wrap=True)
+		table.add_column("ID", justify="right")
+		table.add_column("Кол-во", justify="right")
+		table.add_column("Цена за ед.", justify="right")
+		table.add_column("Итоговая цена", justify="right")
 
 		for mat_id, mat_name, qty in materials:
 			price = prices.get(mat_id)
@@ -83,30 +96,35 @@ def main():
 				effective_price = calculate_effective_cost(price, broker_fee, station_fee, material_efficiency)
 				total_cost = effective_price * qty
 				total_material_cost += total_cost
-				print(f'{mat_name:25} {mat_id:<8} {qty:6} {effective_price:12.2f} ISK {total_cost:18.2f} ISK')
+				table.add_row(mat_name, str(mat_id), str(qty), f"{effective_price:,.2f} ISK", f"{total_cost:,.2f} ISK")
 			else:
-				print(f'{mat_name:25} {mat_id:<8} {qty:6} {"Цена неизвестна":>15}')
+				table.add_row(mat_name, str(mat_id), str(qty), "[red]Н/Д[/]", "[red]Н/Д[/]")
 
-		print('-' * 90)
+		console.print(table)
 
-		item_id = find_type_id_by_name_local(item_name) - 1
-		sell_price = get_lowest_sell_price_by_region(item_id, region_id) or 0
-
-		final_sell_price = sell_price * (1 - sales_tax)
-		build_price = total_material_cost
-
-		if build_price > 0 and final_sell_price > 0:
-			idiot_index = (final_sell_price - build_price) / build_price * 100
-			idiot_index_str = f'{idiot_index:.2f}%'
+		# Получение ID и рыночной цены производимого предмета
+		if item_name.lower().endswith(" blueprint"):
+			base_item_name = item_name.lower().replace(" blueprint", "").strip()
 		else:
-			idiot_index_str = 'Недоступно'
+			base_item_name = item_name.lower()
 
-		print(f'{"Рыночная цена (после налога):":<50} {final_sell_price:18.2f} ISK')
-		print(f'{"Цена постройки объекта:":<50} {build_price:18.2f} ISK')
-		print(f'{"Индекс Гения:":<60} {idiot_index_str}')
+		product_id = find_type_id_by_name_local(base_item_name)
+		buy_price_per_unit = get_lowest_sell_price_by_region(product_id, region_id) or 0
+		buy_price_per_unit_net = buy_price_per_unit * (1 - sales_tax)
+
+		buy_price_per_units = buy_price_per_unit_net * output_qty 
+
+		console.print()
+		console.print(f"[bold]Цена постройки:[/] {total_material_cost:,.2f} ISK")
+		console.print(f"[bold]Цена покупки:[/] {buy_price_per_units:,.2f} ISK")
+
+		idiot_index = (buy_price_per_units - total_material_cost) / total_material_cost * 100
+		console.print(f"[bold green]Индекс Гения:[/] {idiot_index:.2f}%")
+		console.print()
 
 	except Exception as e:
-		print(f'[!!] Ошибка выполнения: {e}')
+		console.print(f"[bold red][!!] Ошибка выполнения: {e}[/]")
+
 
 if __name__ == '__main__':
 	main()
