@@ -132,8 +132,8 @@ def main():
 		broker_fee=args.broker / 100,
 		station_fee=args.station / 100,
 		sales_tax=args.tax / 100,
-		material_efficiency=args.te,
-		time_efficiency_percent=args.me
+		material_efficiency=args.me,
+		time_efficiency_percent=args.te
 	)
 
 	text = Text()
