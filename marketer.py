@@ -103,7 +103,7 @@ def main():
 
 		print(f'{"Рыночная цена (после налога):":<50} {final_sell_price:18.2f} ISK')
 		print(f'{"Цена постройки объекта:":<50} {build_price:18.2f} ISK')
-		print(f'{"Индекс идиота:":<60} {idiot_index_str}')
+		print(f'{"Индекс Гения:":<60} {idiot_index_str}')
 
 	except Exception as e:
 		print(f'[!!] Ошибка выполнения: {e}')
