@@ -1,6 +1,20 @@
 import argparse
 import requests
+import json
+import os
 from blueprint_graber import get_blueprint_materials_by_name, find_type_id_by_name_local
+
+def load_regions(filename='regions.json'):
+	if not os.path.exists(filename):
+		raise FileNotFoundError(f'Файл {filename} с регионами не найден. Сначала сгенерируй его.')
+	with open(filename, 'r', encoding='utf-8') as f:
+		return json.load(f)
+
+def resolve_region_id_by_name(region_name, region_map):
+	for rid, name in region_map.items():
+		if name.lower() == region_name.lower():
+			return int(rid)
+	raise ValueError(f'Регион "{region_name}" не найден. Проверь regions.json или имя.')
 
 def calculate_effective_cost(base_price, broker_fee, station_fee, material_efficiency):
 	material_modifier = 1 - (material_efficiency / 100)
@@ -8,32 +22,36 @@ def calculate_effective_cost(base_price, broker_fee, station_fee, material_effic
 	effective_price = price_with_fees * material_modifier
 	return effective_price
 
-def get_prices_esi(type_ids):
-	url = 'https://esi.evetech.net/latest/markets/prices/'
+def get_lowest_sell_price_by_region(type_id, region_id):
+	url = f'https://esi.evetech.net/latest/markets/{region_id}/orders/?order_type=sell&type_id={type_id}'
 	try:
 		resp = requests.get(url, timeout=10)
 		resp.raise_for_status()
 		data = resp.json()
-		price_map = {}
-		for item in data:
-			tid = item['type_id']
-			if tid in type_ids:
-				price = item.get('average_price') or item.get('adjusted_price')
-				price_map[tid] = price
-		return price_map
+		if not data:
+			return None
+		lowest_order = min(data, key=lambda x: x['price'])
+		return lowest_order['price']
 	except Exception as e:
-		print(f'Ошибка получения цен из ESI: {e}')
-		return {}
+		print(f'[!] Ошибка получения цены type_id={type_id}: {e}')
+		return None
+
+def get_material_prices_by_region(type_ids, region_id):
+	price_map = {}
+	for tid in type_ids:
+		price = get_lowest_sell_price_by_region(tid, region_id)
+		if price:
+			price_map[tid] = price
+	return price_map
 
 def main():
-	parser = argparse.ArgumentParser(description='Расчёт стоимости крафта чертежа в EVE Online')
+	parser = argparse.ArgumentParser(description='Расчёт стоимости крафта чертежа в EVE Online по региону')
 	parser.add_argument('-b', '--broker', type=float, default=3, help='Комиссия брокера (%%)')
 	parser.add_argument('-s', '--station', type=float, default=10, help='Комиссия станции (%%)')
 	parser.add_argument('-t', '--tax', type=float, default=0.5, help='Налог на продажу (%%)')
 	parser.add_argument('-m', '--me', type=int, default=0, help='Эффективность использования материалов (ME, %%)')
 	parser.add_argument('-i', '--item', required=True, help='Название чертежа (Blueprint)')
-
-
+	parser.add_argument('-r', '--region', required=True, help='Название региона (например, The Forge)')
 
 	args = parser.parse_args()
 
@@ -44,11 +62,14 @@ def main():
 	material_efficiency = args.me
 
 	try:
+		region_map = load_regions()
+		region_id = resolve_region_id_by_name(args.region, region_map)
+
 		materials = get_blueprint_materials_by_name(item_name)
 		type_ids = [mat_id for mat_id, _, _ in materials]
-		prices = get_prices_esi(type_ids)
+		prices = get_material_prices_by_region(type_ids, region_id)
 
-		print(f'📦 Материалы для: {item_name}')
+		print(f'📦 Материалы для: {item_name} в регионе {args.region} (ID: {region_id})')
 		print(f'{"Материал":25} {"ID":8} {"Кол-во":>6} {"Цена за ед.":>15} {"Итоговая цена":>20}')
 		print('-' * 90)
 
@@ -66,9 +87,8 @@ def main():
 
 		print('-' * 90)
 
-		item_id = [find_type_id_by_name_local(item_name) - 1]
-		market_price_data = get_prices_esi(item_id)
-		sell_price = market_price_data.get(item_id[0], 0)
+		item_id = find_type_id_by_name_local(item_name) - 1
+		sell_price = get_lowest_sell_price_by_region(item_id, region_id) or 0
 
 		final_sell_price = sell_price * (1 - sales_tax)
 		build_price = total_material_cost
@@ -84,8 +104,7 @@ def main():
 		print(f'{"Индекс идиота:":<60} {idiot_index_str}')
 
 	except Exception as e:
-		print(str(e))
-
+		print(f'[!!] Ошибка выполнения: {e}')
 
 if __name__ == '__main__':
 	main()
