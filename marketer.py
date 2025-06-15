@@ -52,8 +52,8 @@ def main():
 	parser.add_argument('-s', '--station', type=float, default=10, help='Комиссия станции (%%)')
 	parser.add_argument('-t', '--tax', type=float, default=0.5, help='Налог на продажу (%%)')
 	parser.add_argument('-m', '--me', type=int, default=0, help='Эффективность использования материалов (ME, %%)')
-	parser.add_argument('-i', '--item', required=True, help='Название чертежа (Blueprint)')
-	parser.add_argument('-r', '--region', required=True, help='Название региона (например, The Forge)')
+	parser.add_argument('-i', '--item', type=str, required=True, help='Название чертежа (Blueprint)')
+	parser.add_argument('-r', '--region', type=str, default="The Forge", help='Название региона (например, The Forge)')
 
 	args = parser.parse_args()
 
