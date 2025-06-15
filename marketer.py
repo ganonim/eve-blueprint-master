@@ -86,25 +86,16 @@ def calculate_blueprint_cost(item_name, region_name, broker_fee=0.03, station_fe
 
 	for mat_id, mat_name, qty in materials:
 		price = prices.get(mat_id)
-		if price is not None:
-			effective_price = calculate_effective_cost(price, broker_fee, station_fee, material_efficiency)
-			total_cost = effective_price * qty
-			total_material_cost += total_cost
-			output["materials"].append({
-				"id": mat_id,
-				"name": mat_name,
-				"qty": qty,
-				"price_per_unit": effective_price,
-				"total_price": total_cost
-			})
-		else:
-			output["materials"].append({
-				"id": mat_id,
-				"name": mat_name,
-				"qty": qty,
-				"price_per_unit": None,
-				"total_price": None
-			})
+		effective_price = calculate_effective_cost(price, broker_fee, station_fee, material_efficiency)
+		total_cost = effective_price * qty
+		total_material_cost += total_cost
+		output["materials"].append({
+			"id": mat_id,
+			"name": mat_name,
+			"qty": qty,
+			"price_per_unit": effective_price,
+			"total_price": total_cost
+		})
 
 	base_item_name = item_name.lower().strip()
 	product_id = find_type_id_by_name_local(base_item_name)
@@ -164,11 +155,8 @@ def main():
 	table.add_column("Итоговая цена", justify="right")
 
 	for m in result['materials']:
-		if m["price_per_unit"] is not None:
-			table.add_row(m['name'], str(m['id']), str(m['qty']),
-				f"{m['price_per_unit']:,.2f} ISK", f"{m['total_price']:,.2f} ISK")
-		else:
-			table.add_row(m['name'], str(m['id']), str(m['qty']), "[red]Н/Д[/]", "[red]Н/Д[/]")
+		table.add_row(m['name'], str(m['id']), str(m['qty']),
+			f"{m['price_per_unit']:,.2f} ISK", f"{m['total_price']:,.2f} ISK")
 
 	console.print(table)
 
