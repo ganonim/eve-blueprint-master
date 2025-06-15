@@ -5,6 +5,7 @@ import requests
 import json
 import time
 import os
+from rich.text import Text
 from rich.console import Console
 from rich.table import Table
 from rich import box
@@ -55,36 +56,50 @@ def main():
 	parser.add_argument('-b', '--broker', type=float, default=3, help='Комиссия брокера (%%)')
 	parser.add_argument('-s', '--station', type=float, default=10, help='Комиссия станции (%%)')
 	parser.add_argument('-t', '--tax', type=float, default=0.5, help='Налог на продажу (%%)')
-	parser.add_argument('-m', '--me', type=int, default=0, help='Эффективность использования материалов (ME, %%)')
+	parser.add_argument('-me', type=int, default=0, help='Эффективность использования времени (TE, %%)')
+	parser.add_argument('-te', type=int, default=0, help='Эффективность использования материалов (ME, %%)')
 	parser.add_argument('-i', '--item', type=str, required=True, help='Название чертежа (Blueprint)')
 	parser.add_argument('-r', '--region', type=str, default="The Forge", help='Название региона (например, The Forge)')
 
 	args = parser.parse_args()
 
-	item_name = args.item
+	item_name = args.item+" Blueprint"
 	item_id = find_type_id_by_name_local(item_name)
 	broker_fee = args.broker / 100
 	station_fee = args.station / 100
 	sales_tax = args.tax / 100
 	material_efficiency = args.me
+	time_efficiency = 1 - args.te/100
+
+
 
 	local_time = time.localtime()
 	formated_time = time.strftime("%Y-%m-%d/%H:%M:%S", local_time)
+
+	console = Console()
 
 	try:
 		region_map = load_regions()
 		region_id = resolve_region_id_by_name(args.region, region_map)
 
-		# 🔧 Тут: получаем материалы и output_qty
-		materials, output_qty = get_blueprint_materials_by_name(item_name)
+		materials, output_qty, production_time = get_blueprint_materials_by_name(item_name)
 		type_ids = [mat_id for mat_id, _, _ in materials]
 		prices = get_material_prices_by_region(type_ids, region_id)
 
 		total_material_cost = 0
-		console = Console()
-		console.print("")
-		console.print(f'[bold]Материалы для: {item_name} (ID: {item_id})\nПроизводится: {output_qty} шт за цикл ({formated_time})')
-		console.print("")
+		formatted_production_time = production_time * time_efficiency
+		formatted_production_time_full = f"{formatted_production_time // 60:.0f} мин {formatted_production_time % 60:.0f} сек"
+
+		text = Text()
+		text.append(f"Материалы для: {item_name} (ID: {item_id})\n", style="bold")
+		text.append("Производится: ", style="bold ")
+		text.append(f"{output_qty} ", style="bold green")
+		text.append("шт за ", style="bold ")
+		text.append(f"{formatted_production_time_full}", style="bold green")
+		text.append(" мин ", style="bold")
+		text.append(f"({formated_time})", style="bold cyan")
+		console.print(text)
+
 		table = Table()
 		table.add_column("Материал", style="cyan", no_wrap=True)
 		table.add_column("ID", justify="right")
@@ -104,24 +119,23 @@ def main():
 
 		console.print(table)
 
-		# Получение ID и рыночной цены производимого предмета
-		if item_name.lower().endswith(" blueprint"):
-			base_item_name = item_name.lower().replace(" blueprint", "").strip()
-		else:
-			base_item_name = item_name.lower()
-
+		# Определение базового предмета (без " Blueprint")
+		base_item_name = item_name.lower().replace(" blueprint", "").strip()
 		product_id = find_type_id_by_name_local(base_item_name)
 		buy_price_per_unit = get_lowest_sell_price_by_region(product_id, region_id) or 0
 		buy_price_per_unit_net = buy_price_per_unit * (1 - sales_tax)
 
-		buy_price_per_units = buy_price_per_unit_net * output_qty 
+		buy_price_total = buy_price_per_unit_net * output_qty
 
 		console.print()
 		console.print(f"[bold]Цена постройки:[/] {total_material_cost:,.2f} ISK")
-		console.print(f"[bold]Цена покупки:[/] {buy_price_per_units:,.2f} ISK")
+		console.print(f"[bold]Цена покупки:[/] {buy_price_total:,.2f} ISK")
 
-		idiot_index = (buy_price_per_units - total_material_cost) / total_material_cost * 100
-		console.print(f"[bold green]Индекс Гения:[/] {idiot_index:.2f}%")
+		difference = buy_price_total - total_material_cost
+		idiot_index = difference / total_material_cost * 100
+
+		diff_style = "green" if difference >= 0 else "red"
+		console.print(f"[bold {diff_style}]Индекс Гения:[/] {idiot_index:.2f}% ({difference:,.2f} ISK)")
 		console.print()
 
 	except Exception as e:

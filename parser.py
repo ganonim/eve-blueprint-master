@@ -27,6 +27,7 @@ def get_blueprint_materials(type_id):
 	manufacturing = activities.get('manufacturing', {})
 	materials_dict = manufacturing.get('materials', {})
 	products_dict = manufacturing.get('products', {})
+	production_time = manufacturing.get('time', None)
 
 	if not materials_dict or not products_dict:
 		return None  # игнорируем блюпринты без материалов или продукта
@@ -44,8 +45,10 @@ def get_blueprint_materials(type_id):
 
 	return {
 		'materials': materials,
-		'output_qty': output_qty
+		'output_qty': output_qty,
+		'production_time': production_time  # Время в секундах
 	}
+
 
 
 def main():

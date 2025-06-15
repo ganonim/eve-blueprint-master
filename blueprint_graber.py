@@ -36,6 +36,7 @@ def get_blueprint_materials(type_id, materials_filename=BLUEPRINTS_MATERIALS_PAT
 
 	materials_raw = entry.get("materials", [])
 	output_qty = entry.get("output_qty", 1)
+	production_time = entry.get("production_time", 1)
 
 	results = []
 	for mat_id, qty in materials_raw:
@@ -44,7 +45,7 @@ def get_blueprint_materials(type_id, materials_filename=BLUEPRINTS_MATERIALS_PAT
 			mat_name = f'Unknown({mat_id})'
 		results.append((mat_id, mat_name, qty))
 
-	return results, output_qty
+	return results, output_qty, production_time
 
 def get_blueprint_materials_by_name(item_name, materials_filename=BLUEPRINTS_MATERIALS_PATH, typeid_filename=TYPEID_PATH):
 	type_id = find_type_id_by_name_local(item_name, typeid_filename)
