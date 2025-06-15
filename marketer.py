@@ -82,8 +82,10 @@ def main():
 
 		total_material_cost = 0
 		console = Console()
-
-		table = Table(title=f'Материалы для: {item_name} ID: {item_id} ({formated_time})\nПроизводится: {output_qty} шт за цикл', box=box.SIMPLE_HEAVY)
+		console.print("")
+		console.print(f'[bold]Материалы для: {item_name} (ID: {item_id})\nПроизводится: {output_qty} шт за цикл ({formated_time})')
+		console.print("")
+		table = Table()
 		table.add_column("Материал", style="cyan", no_wrap=True)
 		table.add_column("ID", justify="right")
 		table.add_column("Кол-во", justify="right")
