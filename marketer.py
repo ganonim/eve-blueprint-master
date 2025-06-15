@@ -6,9 +6,9 @@ import json
 import os
 from blueprint_graber import get_blueprint_materials_by_name, find_type_id_by_name_local
 
-def load_regions(filename='regions.json'):
+def load_regions(filename='resources/regions.json'):
 	if not os.path.exists(filename):
-		raise FileNotFoundError(f'Файл {filename} с регионами не найден. Сначала сгенерируй его.')
+		raise FileNotFoundError(f'Файл {filename} с регионами не найден.')
 	with open(filename, 'r', encoding='utf-8') as f:
 		return json.load(f)
 

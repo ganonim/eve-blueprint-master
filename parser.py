@@ -2,14 +2,16 @@ import requests
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def load_type_ids(filename='typeid.json'):
+TYPEID_PATH = resources/typeid.json
+
+def load_type_ids(filename):
 	with open(filename, encoding='utf-8') as f:
 		data = json.load(f)
 	# Преобразуем ключи в int, значения — имена
 	type_dict = {int(k): v for k, v in data.items()}
 	return type_dict
 
-def get_all_blueprint_ids(filename='typeid.json'):
+def get_all_blueprint_ids(filename):
 	type_dict = load_type_ids(filename)
 	return [type_id for type_id, name in type_dict.items() if 'blueprint' in name.lower()]
 
@@ -34,7 +36,7 @@ def get_blueprint_materials(type_id):
 	return results
 
 def main():
-	blueprint_ids = get_all_blueprint_ids()
+	blueprint_ids = get_all_blueprint_ids(TYPEID_PATH)
 	all_blueprints = {}
 
 	with ThreadPoolExecutor(max_workers=20) as executor:
