@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from rich.text import Text
 from rich.console import Console
+from rich.style import Style
 from rich.table import Table
 
 from blueprint_graber import get_blueprint_materials_by_name, find_blueprint_id_by_name
@@ -159,8 +160,6 @@ def calculate_blueprint_cost(
 	output["profit"] = difference
 	return output
 
-
-
 # === Пример CLI-интерфейса ===
 def main():
 	parser = argparse.ArgumentParser(description='Расчёт стоимости крафта чертежа в EVE Online по региону')
@@ -204,8 +203,16 @@ def main():
 		table.add_column("Итоговая цена", justify="right")
 
 		for m in result['materials']:
-			table.add_row(m['name'], str(m['id']), str(m['qty']),
-				f"{m['price_per_unit']:,.2f} ISK", f"{m['total_price']:,.2f} ISK")
+			style = None
+			if m['price_per_unit'] == 0:
+				style = "yellow"
+			table.add_row(
+				Text(m['name'], style=style),
+				Text(str(m['id'])),
+				Text(str(m['qty'])),
+				Text(f"{m['price_per_unit']:,.2f} ISK"),
+				Text(f"{m['total_price']:,.2f} ISK")
+    	)
 
 		console.print(table)
 
@@ -253,14 +260,17 @@ def main():
 		table.add_column("Индекс", justify="right")
 
 		for res in results:
+			missing_resource = any(m['price_per_unit'] == 0 for m in res['materials'])
+			row_style = "yellow" if missing_resource else None
 			diff_style = "green" if res['profit'] >= 0 else "red"
 			table.add_row(
-				res["region_name"],
-				f"{res['total_cost']:,.2f}",
-				f"{res['buy_price']:,.2f}",
-				f"[{diff_style}]{res['profit']:,.2f}[/{diff_style}]",
-				f"[{diff_style}]{res['idiot_index']:.2f}%[/{diff_style}]"
+				Text(res["region_name"], style=row_style),
+				Text(f"{res['total_cost']:,.2f}"),
+				Text(f"{res['buy_price']:,.2f}"),
+				Text(f"{res['profit']:,.2f}", style=diff_style),
+				Text(f"{res['idiot_index']:.2f}%", style=diff_style)
 			)
+
 
 		console.print()
 		console.print(table)
