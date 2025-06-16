@@ -71,9 +71,8 @@ def calculate_blueprint_cost(
 	region_map = load_regions()
 	region_id = resolve_region_id_by_name(region_name, region_map)
 
-	item_name_full = item_name
 	# Получаем данные по чертежу
-	bp_data = get_blueprint_materials_by_name(item_name_full)
+	bp_data = get_blueprint_materials_by_name(item_name)
 
 	materials = bp_data["materials"]
 	output_qty = bp_data["output_qty"]
