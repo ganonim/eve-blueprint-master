@@ -2,6 +2,8 @@
 
 import argparse
 import requests
+import asyncio
+import aiohttp
 import json
 import time
 import os
@@ -54,34 +56,47 @@ def get_average_sell_price_all_regions(type_id):
 
 
 # === Получение минимальной цены продажи в регионе ===
-def get_lowest_sell_price_by_region(type_id, region_id=None):
+async def get_lowest_sell_price_by_region(session, type_id, region_id=None):
 	if region_id is None:
-		return get_average_sell_price_all_regions(type_id)
-
-	url = f'https://esi.evetech.net/latest/markets/{region_id}/orders/?order_type=sell&type_id={type_id}'
+		url = 'https://esi.evetech.net/latest/markets/prices/'
+	else:
+		url = f'https://esi.evetech.net/latest/markets/{region_id}/orders/?order_type=sell&type_id={type_id}'
 	try:
-		resp = requests.get(url, timeout=10)
-		resp.raise_for_status()
-		data = resp.json()
-		if not data:
-			return None
-		lowest_order = min(data, key=lambda x: x['price'])
-		return lowest_order['price']
+		async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+			resp.raise_for_status()
+			data = await resp.json()
+			if region_id is None:
+				for item in data:
+					if item.get("type_id") == type_id:
+						return item.get("average_price")
+				return None
+			else:
+				if not data:
+					return None
+				lowest_order = min(data, key=lambda x: x['price'])
+				return lowest_order['price']
 	except Exception as e:
-		print(f'[!] Ошибка получения цены type_id={type_id} в регионе {region_id}: {e}')
+		print(f'[!] Ошибка получения цены type_id={type_id}: {e}')
 		return None
 
 
 # === Массовое получение цен на материалы ===
-def get_material_prices_by_region(type_ids, region_id):
-	price_map = {}
-	for tid in type_ids:
-		price = get_lowest_sell_price_by_region(tid, region_id)
-		if price:
-			price_map[tid] = price
-	return price_map
+async def get_material_prices_by_region(type_ids, region_id, session, concurrency=10):
+    price_map = {}
+    semaphore = asyncio.Semaphore(concurrency)
 
-def calculate_blueprint_cost(
+    async def get_price(tid):
+        async with semaphore:
+            return tid, await get_lowest_sell_price_by_region(session, tid, region_id)
+
+    tasks = [asyncio.create_task(get_price(tid)) for tid in type_ids]
+    for task in asyncio.as_completed(tasks):
+        tid, price = await task
+        if price:
+            price_map[tid] = price
+    return price_map
+
+async def calculate_blueprint_cost_async(
 	item_name,
 	region_name=None,
 	broker_fee=0.03,
@@ -95,7 +110,6 @@ def calculate_blueprint_cost(
 		region_map = load_regions()
 		region_id = resolve_region_id_by_name(region_name, region_map)
 
-	# Получаем данные по чертежу
 	bp_data = get_blueprint_materials_by_name(item_name)
 
 	materials = bp_data["materials"]
@@ -103,65 +117,55 @@ def calculate_blueprint_cost(
 	production_time = bp_data["production_time"]
 	item_name_right = bp_data["product_name"]
 	item_id = bp_data["blueprint_id"]
+	product_id = bp_data.get("product_id") or find_blueprint_id_by_name(item_name.lower().strip())
 
-	# Для подсчёта цены покупки итогового продукта ищем цену по product_id
-	product_id = bp_data.get("product_id")
-	if product_id is None:
-		# fallback: попробуем найти id по имени
-		product_id = find_blueprint_id_by_name(item_name.lower().strip())
+	async with aiohttp.ClientSession() as session:
+		buy_price_per_unit = await get_lowest_sell_price_by_region(session, product_id, region_id)
+		if not buy_price_per_unit:
+			return None
+		buy_price_total = buy_price_per_unit * (1 - sales_tax) * output_qty
 
-	# Проверяем цену конечного продукта в регионе (если она отсутствует — сразу None)
-	buy_price_per_unit = get_lowest_sell_price_by_region(product_id, region_id)
-	if not buy_price_per_unit or buy_price_per_unit == 0:
-		return None
+		type_ids = [mat_id for mat_id, _, _ in materials]
+		prices = await get_material_prices_by_region(type_ids, region_id, session)
 
-	buy_price_per_unit_net = buy_price_per_unit * (1 - sales_tax)
-	buy_price_total = buy_price_per_unit_net * output_qty
+		if any(price is None or price == 0 for price in prices.values()):
+			return None
 
-	# Получаем цены по регионам для всех материалов
-	type_ids = [mat_id for mat_id, _, _ in materials]
-	prices = get_material_prices_by_region(type_ids, region_id)
+		total_material_cost = 0
+		formatted_production_time = production_time * (1 - time_efficiency_percent / 100)
 
-	# Если хоть одна цена на материалы равна 0 или None — пропускаем регион
-	if any(price is None or price == 0 for price in prices.values()):
-		return None
+		output = {
+			"item_name": item_name_right,
+			"item_id": item_id,
+			"output_qty": output_qty,
+			"production_time": formatted_production_time,
+			"materials": [],
+			"timestamp": time.strftime("%Y-%m-%d/%H:%M:%S", time.localtime())
+		}
 
-	total_material_cost = 0
-	formatted_production_time = production_time * (1 - time_efficiency_percent / 100)
+		for mat_id, mat_name, qty in materials:
+			price = prices.get(mat_id)
+			effective_price = calculate_effective_cost(price or 0, broker_fee, station_fee, material_efficiency)
+			total_cost = effective_price * qty
+			total_material_cost += total_cost
+			output["materials"].append({
+				"id": mat_id,
+				"name": mat_name,
+				"qty": qty,
+				"price_per_unit": effective_price,
+				"total_price": total_cost
+			})
 
-	output = {
-		"item_name": item_name_right,
-		"item_id": item_id,
-		"output_qty": output_qty,
-		"production_time": formatted_production_time,
-		"materials": [],
-		"timestamp": time.strftime("%Y-%m-%d/%H:%M:%S", time.localtime())
-	}
+		diff = buy_price_total - total_material_cost
+		output["total_cost"] = total_material_cost
+		output["buy_price"] = buy_price_total
+		output["profit"] = diff
+		output["idiot_index"] = (diff / total_material_cost * 100) if total_material_cost > 0 else 0
+		return output
 
-	for mat_id, mat_name, qty in materials:
-		price = prices.get(mat_id)
-		effective_price = calculate_effective_cost(price or 0, broker_fee, station_fee, material_efficiency)
-		total_cost = effective_price * qty
-		total_material_cost += total_cost
-		output["materials"].append({
-			"id": mat_id,
-			"name": mat_name,
-			"qty": qty,
-			"price_per_unit": effective_price,
-			"total_price": total_cost
-		})
-
-	difference = buy_price_total - total_material_cost
-	idiot_index = (difference / total_material_cost * 100) if total_material_cost > 0 else 0
-
-	output["total_cost"] = total_material_cost
-	output["buy_price"] = buy_price_total
-	output["idiot_index"] = idiot_index
-	output["profit"] = difference
-	return output
 
 # === Пример CLI-интерфейса ===
-def main():
+async def main():
 	parser = argparse.ArgumentParser(description='Расчёт стоимости крафта чертежа в EVE Online по региону')
 	parser.add_argument('-b', '--broker', type=float, default=3, help='Комиссия брокера (%%)')
 	parser.add_argument('-s', '--station', type=float, default=10, help='Комиссия станции (%%)')
@@ -174,7 +178,7 @@ def main():
 	args = parser.parse_args()
  
 	if args.region:
-		result = calculate_blueprint_cost(
+		result = await calculate_blueprint_cost_async(
 			item_name=args.item,
 			region_name=args.region,
 			broker_fee=args.broker / 100,
@@ -185,7 +189,7 @@ def main():
 		)
 
 		text = Text()
-		text.append(f"Материалы для: {result['item_name']} (ID: {result['item_id']})\n", style="bold")
+		text.append(f"Материалы для: {result["item_name"]} (ID: {result['item_id']})\n", style="bold")
 		text.append("Производится: ", style="bold")
 		text.append(f"{result['output_qty']} ", style="bold green")
 		text.append("шт за ", style="bold")
@@ -225,34 +229,50 @@ def main():
 
 	else:
 		region_map = load_regions()
-		results = []
-
 		region_ids = range(10000001, 10000071)
+		semaphore = asyncio.Semaphore(10)  # ограничение параллелизма
 
-		for rid_int in tqdm(region_ids, desc="Обработка регионов"):
+		async def limited_calculate(region_name):
+			async with semaphore:
+				try:
+					result = await calculate_blueprint_cost_async(
+						item_name=args.item,
+						region_name=region_name,
+						broker_fee=args.broker / 100,
+						station_fee=args.station / 100,
+						sales_tax=args.tax / 100,
+						material_efficiency=args.me,
+						time_efficiency_percent=args.te
+					)
+					if result is not None:
+						result['region_name'] = region_name  # добавляем имя региона сюда
+					return result
+				except Exception as e:
+					console.print(f"[red][!] Ошибка в регионе '{region_name}': {e}[/red]")
+					return None
+
+
+		tasks = []
+		for rid_int in region_ids:
 			rid_str = str(rid_int)
 			region_name = region_map.get(rid_str)
 			if region_name is None:
 				continue
-			try:
-				result = calculate_blueprint_cost(
-					item_name=args.item,
-					region_name=region_name,
-					broker_fee=args.broker / 100,
-					station_fee=args.station / 100,
-					sales_tax=args.tax / 100,
-					material_efficiency=args.me,
-					time_efficiency_percent=args.te
-				)
-				result['region_name'] = region_name
-				results.append(result)
-			except Exception as e:
-				#console.print(f"[red][!] Ошибка в регионе '{region_name}': {e}[/red]")
-				continue
+			tasks.append(asyncio.create_task(limited_calculate(region_name)))
+
+		results = []
+		for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Обработка регионов"):
+			res = await coro
+			if res is not None:
+				results.append(res)
+
+		if not results:
+			console.print("[red]Нет данных для выбранного предмета в указанных регионах[/red]")
+			return
 
 		results.sort(key=lambda x: x["profit"], reverse=True)
 
-		table = Table(title=f"Цены на '{result['item_name']}' по регионам")
+		table = Table(title=f"Цены на '{args.item}' по регионам")
 		table.add_column("Регион", style="cyan")
 		table.add_column("Себестоимость", justify="right")
 		table.add_column("Продажа", justify="right")
@@ -271,11 +291,9 @@ def main():
 				Text(f"{res['idiot_index']:.2f}%", style=diff_style)
 			)
 
-
 		console.print()
 		console.print(table)
 
 
-
 if __name__ == '__main__':
-	main()
+	asyncio.run(main())
