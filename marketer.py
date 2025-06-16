@@ -78,6 +78,7 @@ def calculate_blueprint_cost(
 	materials = bp_data["materials"]
 	output_qty = bp_data["output_qty"]
 	production_time = bp_data["production_time"]
+	item_name_right = bp_data["product_name"]
 	item_id = bp_data["blueprint_id"]
 
 	# Получаем цены по регионам для всех материалов
@@ -88,7 +89,7 @@ def calculate_blueprint_cost(
 	formatted_production_time = production_time * (1 - time_efficiency_percent / 100)
 
 	output = {
-		"item_name": item_name_full,
+		"item_name": item_name_right,
 		"item_id": item_id,
 		"output_qty": output_qty,
 		"production_time": formatted_production_time,
