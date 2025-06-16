@@ -5,6 +5,9 @@ import requests
 import json
 import time
 import os
+
+from tqdm import tqdm
+
 from rich.text import Text
 from rich.console import Console
 from rich.table import Table
@@ -35,8 +38,25 @@ def calculate_effective_cost(base_price, broker_fee, station_fee, material_effic
 	effective_price = price_with_fees * material_modifier
 	return effective_price
 
+def get_average_sell_price_all_regions(type_id):
+	url = f'https://esi.evetech.net/latest/markets/prices/'
+	try:
+		resp = requests.get(url, timeout=10)
+		resp.raise_for_status()
+		data = resp.json()
+		for item in data:
+			if item.get("type_id") == type_id:
+				return item.get("average_price")
+	except Exception as e:
+		print(f'[!] Ошибка получения средней цены по рынку для type_id={type_id}: {e}')
+		return None
+
+
 # === Получение минимальной цены продажи в регионе ===
-def get_lowest_sell_price_by_region(type_id, region_id):
+def get_lowest_sell_price_by_region(type_id, region_id=None):
+	if region_id is None:
+		return get_average_sell_price_all_regions(type_id)
+
 	url = f'https://esi.evetech.net/latest/markets/{region_id}/orders/?order_type=sell&type_id={type_id}'
 	try:
 		resp = requests.get(url, timeout=10)
@@ -47,8 +67,9 @@ def get_lowest_sell_price_by_region(type_id, region_id):
 		lowest_order = min(data, key=lambda x: x['price'])
 		return lowest_order['price']
 	except Exception as e:
-		print(f'[!] Ошибка получения цены type_id={type_id}: {e}')
+		print(f'[!] Ошибка получения цены type_id={type_id} в регионе {region_id}: {e}')
 		return None
+
 
 # === Массовое получение цен на материалы ===
 def get_material_prices_by_region(type_ids, region_id):
@@ -61,15 +82,17 @@ def get_material_prices_by_region(type_ids, region_id):
 
 def calculate_blueprint_cost(
 	item_name,
-	region_name,
+	region_name=None,
 	broker_fee=0.03,
 	station_fee=0.1,
 	sales_tax=0.005,
 	material_efficiency=0,
 	time_efficiency_percent=0
 ):
-	region_map = load_regions()
-	region_id = resolve_region_id_by_name(region_name, region_map)
+	region_id = None
+	if region_name:
+		region_map = load_regions()
+		region_id = resolve_region_id_by_name(region_name, region_map)
 
 	# Получаем данные по чертежу
 	bp_data = get_blueprint_materials_by_name(item_name)
@@ -80,9 +103,27 @@ def calculate_blueprint_cost(
 	item_name_right = bp_data["product_name"]
 	item_id = bp_data["blueprint_id"]
 
+	# Для подсчёта цены покупки итогового продукта ищем цену по product_id
+	product_id = bp_data.get("product_id")
+	if product_id is None:
+		# fallback: попробуем найти id по имени
+		product_id = find_blueprint_id_by_name(item_name.lower().strip())
+
+	# Проверяем цену конечного продукта в регионе (если она отсутствует — сразу None)
+	buy_price_per_unit = get_lowest_sell_price_by_region(product_id, region_id)
+	if not buy_price_per_unit or buy_price_per_unit == 0:
+		return None
+
+	buy_price_per_unit_net = buy_price_per_unit * (1 - sales_tax)
+	buy_price_total = buy_price_per_unit_net * output_qty
+
 	# Получаем цены по регионам для всех материалов
 	type_ids = [mat_id for mat_id, _, _ in materials]
 	prices = get_material_prices_by_region(type_ids, region_id)
+
+	# Если хоть одна цена на материалы равна 0 или None — пропускаем регион
+	if any(price is None or price == 0 for price in prices.values()):
+		return None
 
 	total_material_cost = 0
 	formatted_production_time = production_time * (1 - time_efficiency_percent / 100)
@@ -109,16 +150,6 @@ def calculate_blueprint_cost(
 			"total_price": total_cost
 		})
 
-	# Для подсчёта цены покупки итогового продукта ищем цену по product_id
-	product_id = bp_data.get("product_id")
-	if product_id is None:
-		# fallback: попробуем найти id по имени
-		product_id = find_blueprint_id_by_name(item_name.lower().strip())
-
-	buy_price_per_unit = get_lowest_sell_price_by_region(product_id, region_id) or 0
-	buy_price_per_unit_net = buy_price_per_unit * (1 - sales_tax)
-	buy_price_total = buy_price_per_unit_net * output_qty
-
 	difference = buy_price_total - total_material_cost
 	idiot_index = (difference / total_material_cost * 100) if total_material_cost > 0 else 0
 
@@ -127,6 +158,8 @@ def calculate_blueprint_cost(
 	output["idiot_index"] = idiot_index
 	output["profit"] = difference
 	return output
+
+
 
 # === Пример CLI-интерфейса ===
 def main():
@@ -137,50 +170,101 @@ def main():
 	parser.add_argument('-me', type=int, default=0, help='Эффективность использования времени (TE, %%)')
 	parser.add_argument('-te', type=int, default=0, help='Эффективность использования материалов (ME, %%)')
 	parser.add_argument('-i', '--item', type=str, required=True, help='Название чертежа (Blueprint)')
-	parser.add_argument('-r', '--region', type=str, default="The Forge", help='Название региона')
+	parser.add_argument('-r', '--region', type=str, default=None, help='Название региона (если не указан — сравним все)')
 
 	args = parser.parse_args()
+ 
+	if args.region:
+		result = calculate_blueprint_cost(
+			item_name=args.item,
+			region_name=args.region,
+			broker_fee=args.broker / 100,
+			station_fee=args.station / 100,
+			sales_tax=args.tax / 100,
+			material_efficiency=args.me,
+			time_efficiency_percent=args.te
+		)
 
-	result = calculate_blueprint_cost(
-		item_name=args.item,
-		region_name=args.region,
-		broker_fee=args.broker / 100,
-		station_fee=args.station / 100,
-		sales_tax=args.tax / 100,
-		material_efficiency=args.me,
-		time_efficiency_percent=args.te
-	)
+		text = Text()
+		text.append(f"Материалы для: {result['item_name']} (ID: {result['item_id']})\n", style="bold")
+		text.append("Производится: ", style="bold")
+		text.append(f"{result['output_qty']} ", style="bold green")
+		text.append("шт за ", style="bold")
+		text.append(f"{int(result['production_time'] // 60)} мин {int(result['production_time'] % 60)} сек", style="bold green")
+		text.append(" (", style="bold")
+		text.append(f"{result['timestamp']}", style="bold cyan")
+		text.append(")", style="bold")
+		console.print(text)
 
-	text = Text()
-	text.append(f"Материалы для: {result['item_name']} (ID: {result['item_id']})\n", style="bold")
-	text.append("Производится: ", style="bold")
-	text.append(f"{result['output_qty']} ", style="bold green")
-	text.append("шт за ", style="bold")
-	text.append(f"{int(result['production_time'] // 60)} мин {int(result['production_time'] % 60)} сек", style="bold green")
-	text.append(" (", style="bold")
-	text.append(f"{result['timestamp']}", style="bold cyan")
-	text.append(")", style="bold")
-	console.print(text)
+		table = Table()
+		table.add_column("Материал", style="cyan", no_wrap=True)
+		table.add_column("ID", justify="right")
+		table.add_column("Кол-во", justify="right")
+		table.add_column("Цена за ед.", justify="right")
+		table.add_column("Итоговая цена", justify="right")
 
-	table = Table()
-	table.add_column("Материал", style="cyan", no_wrap=True)
-	table.add_column("ID", justify="right")
-	table.add_column("Кол-во", justify="right")
-	table.add_column("Цена за ед.", justify="right")
-	table.add_column("Итоговая цена", justify="right")
+		for m in result['materials']:
+			table.add_row(m['name'], str(m['id']), str(m['qty']),
+				f"{m['price_per_unit']:,.2f} ISK", f"{m['total_price']:,.2f} ISK")
 
-	for m in result['materials']:
-		table.add_row(m['name'], str(m['id']), str(m['qty']),
-			f"{m['price_per_unit']:,.2f} ISK", f"{m['total_price']:,.2f} ISK")
+		console.print(table)
 
-	console.print(table)
+		diff_style = "green" if result['profit'] >= 0 else "red"
+		console.print()
+		console.print(f"[bold]Цена постройки:[/] {result['total_cost']:,.2f} ISK")
+		console.print(f"[bold]Цена покупки:[/] {result['buy_price']:,.2f} ISK")
+		console.print(f"[bold {diff_style}]Индекс Гения:[/] {result['idiot_index']:.2f}% ({result['profit']:,.2f} ISK)")
+		console.print()
 
-	diff_style = "green" if result['profit'] >= 0 else "red"
-	console.print()
-	console.print(f"[bold]Цена постройки:[/] {result['total_cost']:,.2f} ISK")
-	console.print(f"[bold]Цена покупки:[/] {result['buy_price']:,.2f} ISK")
-	console.print(f"[bold {diff_style}]Индекс Гения:[/] {result['idiot_index']:.2f}% ({result['profit']:,.2f} ISK)")
-	console.print()
+	else:
+		region_map = load_regions()
+		results = []
+
+		region_ids = range(10000001, 10000071)
+
+		for rid_int in tqdm(region_ids, desc="Обработка регионов"):
+			rid_str = str(rid_int)
+			region_name = region_map.get(rid_str)
+			if region_name is None:
+				continue
+			try:
+				result = calculate_blueprint_cost(
+					item_name=args.item,
+					region_name=region_name,
+					broker_fee=args.broker / 100,
+					station_fee=args.station / 100,
+					sales_tax=args.tax / 100,
+					material_efficiency=args.me,
+					time_efficiency_percent=args.te
+				)
+				result['region_name'] = region_name
+				results.append(result)
+			except Exception as e:
+				#console.print(f"[red][!] Ошибка в регионе '{region_name}': {e}[/red]")
+				continue
+
+		results.sort(key=lambda x: x["profit"], reverse=True)
+
+		table = Table(title=f"Цены на '{result['item_name']}' по регионам")
+		table.add_column("Регион", style="cyan")
+		table.add_column("Себестоимость", justify="right")
+		table.add_column("Продажа", justify="right")
+		table.add_column("Прибыль", justify="right")
+		table.add_column("Индекс", justify="right")
+
+		for res in results:
+			diff_style = "green" if res['profit'] >= 0 else "red"
+			table.add_row(
+				res["region_name"],
+				f"{res['total_cost']:,.2f}",
+				f"{res['buy_price']:,.2f}",
+				f"[{diff_style}]{res['profit']:,.2f}[/{diff_style}]",
+				f"[{diff_style}]{res['idiot_index']:.2f}%[/{diff_style}]"
+			)
+
+		console.print()
+		console.print(table)
+
 
 
 if __name__ == '__main__':
