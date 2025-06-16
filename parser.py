@@ -1,26 +1,26 @@
-import requests
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
+import time
 
-TYPEID_PATH = "resources/typeid.json"
+FILENAME = 'resources/blueprints_materials.json'
+IDS_FILENAME = 'resources/blueprints_ids.json'
 
-def load_type_ids(filename):
-	with open(filename, encoding='utf-8') as f:
-		data = json.load(f)
-	# Преобразуем ключи в int, значения — имена
-	type_dict = {int(k): v for k, v in data.items()}
-	return type_dict
-
-def get_all_blueprint_ids(filename):
-	type_dict = load_type_ids(filename)
-	return [type_id for type_id, name in type_dict.items() if 'blueprint' in name.lower()]
+def get_type_name(type_id):
+	url = f'https://ref-data.everef.net/types/{type_id}'
+	resp = requests.get(url)
+	if resp.status_code != 200:
+		return f"Unknown({type_id})"
+	data = resp.json()
+	return data.get('name', {}).get('en', f"Unknown({type_id})")
 
 def get_blueprint_materials(type_id):
 	url = f'https://ref-data.everef.net/blueprints/{type_id}'
 	resp = requests.get(url)
-	print(f'Запрос blueprint {type_id}')
 	if resp.status_code != 200:
-		raise RuntimeError(f'❌ Ошибка запроса: статус {resp.status_code}')
+		print(f'⚠️ Не удалось получить blueprint {type_id}, статус {resp.status_code}')
+		return None
 
 	data = resp.json()
 	activities = data.get('activities', {})
@@ -30,46 +30,85 @@ def get_blueprint_materials(type_id):
 	production_time = manufacturing.get('time', None)
 
 	if not materials_dict or not products_dict:
-		return None  # игнорируем блюпринты без материалов или продукта
+		print(f'⚠️ Для blueprint {type_id} отсутствуют материалы или продукты')
+		return None
 
-	# Получаем первую (основную) продукцию и её количество
-	_, product = next(iter(products_dict.items()))
+	product_id_str, product = next(iter(products_dict.items()))
+	product_id = int(product_id_str)
 	output_qty = product.get('quantity', 1)
+	product_name = get_type_name(product_id)
 
-	# Сохраняем материалы
 	materials = []
 	for mat_id_str, mat_data in materials_dict.items():
 		mat_id = int(mat_id_str)
 		qty = mat_data['quantity']
-		materials.append([mat_id, qty])
+		name = get_type_name(mat_id)
+		materials.append([mat_id, name, qty])
 
 	return {
-		'materials': materials,
-		'output_qty': output_qty,
-		'production_time': production_time  # Время в секундах
+		# "blueprint_id": type_id,  # ⛔️ больше не нужен
+		"product_id": product_id,
+		"product_name": product_name,
+		"materials": materials,
+		"output_qty": output_qty,
+		"production_time": production_time
 	}
 
 
+def get_item_name(type_id):
+	url = f'https://ref-data.everef.net/types/{type_id}'
+	resp = requests.get(url)
+	if resp.status_code != 200:
+		return None
+	data = resp.json()
+	return data.get('name', {}).get('en')
+
+def load_json_file(filename):
+	if not os.path.exists(filename):
+		return {}
+	with open(filename, 'r', encoding='utf-8') as f:
+		return json.load(f)
 
 def main():
-	blueprint_ids = get_all_blueprint_ids(TYPEID_PATH)
-	all_blueprints = {}
+	blueprint_data = load_json_file(FILENAME)
+	blueprint_ids = load_json_file(IDS_FILENAME)
 
+	print(f'ℹ️ Всего ID в списке: {len(blueprint_ids)}')
+	print(f'ℹ️ Уже есть в файле: {len(blueprint_data)}')
+
+	to_fetch = []
+	for tid in blueprint_ids:
+		tid_str = str(tid)
+		entry = blueprint_data.get(tid_str)
+		if not entry or 'materials' not in entry or 'output_qty' not in entry or 'production_time' not in entry:
+			to_fetch.append(tid)
+
+	print(f'🛠️ Нужно дозагрузить: {len(to_fetch)} блюпринтов')
+
+	# Загружаем недостающие блюпринты
 	with ThreadPoolExecutor(max_workers=20) as executor:
-		futures = {executor.submit(get_blueprint_materials, bp_id): bp_id for bp_id in blueprint_ids}
+		futures = {
+			executor.submit(get_blueprint_materials, tid): tid
+			for tid in to_fetch
+		}
 		for future in as_completed(futures):
-			bp_id = futures[future]
+			tid = futures[future]
 			try:
-				materials = future.result()
-				if materials:
-					all_blueprints[bp_id] = materials
+				result = future.result()
+				if result:
+					blueprint_data[str(tid)] = result
+					print(f'✅ Загружен blueprint {tid}: {result["product_name"]}')
+				else:
+					print(f'⚠️ Пропущен blueprint {tid}')
 			except Exception as e:
-				print(f'⚠️ Ошибка при обработке blueprint {bp_id}: {e}')
+				print(f'⚠️ Ошибка в get_blueprint_materials {tid}: {e}')
+			time.sleep(0.02)
 
-	with open('blueprints_materials.json', 'w', encoding='utf-8') as f:
-		json.dump(all_blueprints, f, indent=2, ensure_ascii=False)
 
-	print(f'✅ Данные сохранены в blueprints_materials.json')
+	with open(FILENAME, 'w', encoding='utf-8') as f:
+		json.dump(blueprint_data, f, indent=2, ensure_ascii=False)
+
+	print(f'✅ Сохранено блюпринтов: {len(blueprint_data)} в {FILENAME}')
 
 if __name__ == '__main__':
 	main()

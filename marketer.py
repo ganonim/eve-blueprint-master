@@ -9,8 +9,7 @@ from rich.text import Text
 from rich.console import Console
 from rich.table import Table
 
-from blueprint_graber import get_blueprint_materials_by_name, find_type_id_by_name_local
-
+from blueprint_graber import get_blueprint_materials_by_name, find_blueprint_id_by_name
 
 # === Консоль для вывода (можно переопределять в других модулях) ===
 console = Console()
@@ -60,15 +59,28 @@ def get_material_prices_by_region(type_ids, region_id):
 			price_map[tid] = price
 	return price_map
 
-# === Основной логический блок, возвращает подробную информацию о чертеже ===
-def calculate_blueprint_cost(item_name, region_name, broker_fee=0.03, station_fee=0.1, sales_tax=0.005,
-                             material_efficiency=0, time_efficiency_percent=0):
+def calculate_blueprint_cost(
+	item_name,
+	region_name,
+	broker_fee=0.03,
+	station_fee=0.1,
+	sales_tax=0.005,
+	material_efficiency=0,
+	time_efficiency_percent=0
+):
 	region_map = load_regions()
 	region_id = resolve_region_id_by_name(region_name, region_map)
-	item_name_full = item_name + " Blueprint"
-	item_id = find_type_id_by_name_local(item_name_full)
 
-	materials, output_qty, production_time = get_blueprint_materials_by_name(item_name_full)
+	item_name_full = item_name
+	# Получаем данные по чертежу
+	bp_data = get_blueprint_materials_by_name(item_name_full)
+
+	materials = bp_data["materials"]
+	output_qty = bp_data["output_qty"]
+	production_time = bp_data["production_time"]
+	item_id = bp_data["blueprint_id"]
+
+	# Получаем цены по регионам для всех материалов
 	type_ids = [mat_id for mat_id, _, _ in materials]
 	prices = get_material_prices_by_region(type_ids, region_id)
 
@@ -86,7 +98,7 @@ def calculate_blueprint_cost(item_name, region_name, broker_fee=0.03, station_fe
 
 	for mat_id, mat_name, qty in materials:
 		price = prices.get(mat_id)
-		effective_price = calculate_effective_cost(price, broker_fee, station_fee, material_efficiency)
+		effective_price = calculate_effective_cost(price or 0, broker_fee, station_fee, material_efficiency)
 		total_cost = effective_price * qty
 		total_material_cost += total_cost
 		output["materials"].append({
@@ -97,21 +109,24 @@ def calculate_blueprint_cost(item_name, region_name, broker_fee=0.03, station_fe
 			"total_price": total_cost
 		})
 
-	base_item_name = item_name.lower().strip()
-	product_id = find_type_id_by_name_local(base_item_name)
-	buy_price_per_unit = get_lowest_sell_price_by_region(product_id, region_id)
+	# Для подсчёта цены покупки итогового продукта ищем цену по product_id
+	product_id = bp_data.get("product_id")
+	if product_id is None:
+		# fallback: попробуем найти id по имени
+		product_id = find_blueprint_id_by_name(item_name.lower().strip())
+
+	buy_price_per_unit = get_lowest_sell_price_by_region(product_id, region_id) or 0
 	buy_price_per_unit_net = buy_price_per_unit * (1 - sales_tax)
 	buy_price_total = buy_price_per_unit_net * output_qty
 
 	difference = buy_price_total - total_material_cost
-	idiot_index = difference / total_material_cost * 100
+	idiot_index = (difference / total_material_cost * 100) if total_material_cost > 0 else 0
 
 	output["total_cost"] = total_material_cost
 	output["buy_price"] = buy_price_total
 	output["idiot_index"] = idiot_index
 	output["profit"] = difference
 	return output
-
 
 # === Пример CLI-интерфейса ===
 def main():
