@@ -70,9 +70,9 @@ if __name__ == '__main__':
 	item_name = 'Combat Scanner Probe I Blueprint'
 	try:
 		materials, output_qty, prod_time, actual_name, blueprint_id = get_blueprint_materials_by_name(item_name)
-		print(f'🔹 Blueprint: {actual_name}')
-		print(f'🆔 ID: {blueprint_id}')
-		print(f'📦 Производится: {output_qty} шт. за {prod_time} сек\n')
+		print(f'Blueprint: {actual_name}')
+		print(f'ID: {blueprint_id}')
+		print(f'Производится: {output_qty} шт. за {prod_time} сек\n')
 		for mat_id, mat_name, qty in materials:
 			print(f'{mat_name:30} ({mat_id:>6}): {qty}')
 	except Exception as e:
