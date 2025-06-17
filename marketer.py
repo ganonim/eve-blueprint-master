@@ -283,13 +283,27 @@ async def main():
 			missing_resource = any(m['price_per_unit'] == 0 for m in res['materials'])
 			row_style = "yellow" if missing_resource else None
 			diff_style = "green" if res['profit'] >= 0 else "red"
+
+			if row_style:
+				cost_str = "-"
+				profit_str = "-"
+				index_str = "-"
+				profit_style = None
+			else:
+				cost_str = f"{res['total_cost']:,.2f}"
+				profit_str = f"{res['profit']:,.2f}"
+				index_str = f"{res['idiot_index']:.2f}%"
+				profit_style = diff_style
+
 			table.add_row(
 				Text(res["region_name"], style=row_style),
-				Text(f"{res['total_cost']:,.2f}"),
+				Text(cost_str),
 				Text(f"{res['buy_price']:,.2f}"),
-				Text(f"{res['profit']:,.2f}", style=diff_style),
-				Text(f"{res['idiot_index']:.2f}%", style=diff_style)
+				Text(profit_str, style=profit_style),
+				Text(index_str, style=profit_style)
 			)
+
+
 
 		console.print()
 		console.print(table)
